@@ -1,0 +1,10 @@
+sharepoint:
+  service: Sharepoint
+  ms_graph_url: <%= Rails.application.credentials.dig(:sharepoint, :ms_graph_url) || ENV["MS_GRAPH_URL"] %>
+  ms_graph_version: <%= Rails.application.credentials.dig(:sharepoint, :ms_graph_version) || ENV["MS_GRAPH_VERSION"] %>
+  auth_host: <%= Rails.application.credentials.dig(:sharepoint, :auth_host) || ENV["AUTH_HOST"] %>
+  tenant_id: <%= Rails.application.credentials.dig(:sharepoint, :oauth_tenant) || ENV["OAUTH_TENANT"] %>
+  app_id: <%= Rails.application.credentials.dig(:sharepoint, :oauth_app_id) || ENV["OAUTH_APP_ID"] %>
+  secret: <%= Rails.application.credentials.dig(:sharepoint, :oauth_secret) || ENV["OAUTH_SECRET"] %>
+  site_id: <%= Rails.application.credentials.dig(:sharepoint, :sharepoint_site_id) || ENV["SHAREPOINT_SITE_ID"] %>
+  drive_id: <%= Rails.application.credentials.dig(:sharepoint, :sharepoint_drive_id) || ENV["SHAREPOINT_DRIVE_ID"] %>

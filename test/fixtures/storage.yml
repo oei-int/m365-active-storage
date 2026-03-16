@@ -1,0 +1,10 @@
+sharepoint:
+  service: Sharepoint
+  ms_graph_url: https://graph.microsoft.com
+  ms_graph_version: v1.0
+  auth_host: https://login.microsoftonline.com
+  tenant_id: test-tenant-id
+  app_id: test-app-id
+  secret: test-secret
+  site_id: test-site-id
+  drive_id: test-drive-id
