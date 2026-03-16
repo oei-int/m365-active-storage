@@ -4,13 +4,13 @@ Rails ActiveStorage in M365 Sharepoint
 
 ## Install the gem
 
-Add to Gemfile:
+```ruby
+gem install m365_active_storage
+```
+or add to the Gemfile:
 
 ```ruby
-source "https://rubygems.dev.intranet.oei.int/private" do
-  # Use the m365_active_storage gem for Microsoft 365 integration
-  gem "m365_active_storage"
-end
+gem "m365_active_storage"
 ```
 
 ## Configure ActiveStorage
