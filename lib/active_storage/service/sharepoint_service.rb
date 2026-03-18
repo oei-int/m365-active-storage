@@ -271,9 +271,8 @@ module ActiveStorage
     # @see M365ActiveStorage::Railtie
     def delete(key)
       auth.ensure_valid_token
-      # get the filename from the pending deletes storage
-      # because once the blob is deleted, we can no longer get the filename from the blob record
-      storage_name = M365ActiveStorage::PendingDelete.get(key)
+
+      storage_name = @config.storage_key.downcase == "key" ? key : M365ActiveStorage::PendingDelete.get(key)
       raise "Filename not found for key #{key}. Cannot delete file from SharePoint." unless storage_name
 
       delete_url = "#{drive_url}/root:/#{CGI.escape(storage_name)}"
@@ -376,6 +375,8 @@ module ActiveStorage
     #   # If blob exists: => "document.pdf"
     #   # If blob doesn't exist: => "abc123def456"
     def get_storage_name(key)
+      return key if @config.storage_key.downcase == "key"
+
       blob = ActiveStorage::Blob.find_by(key: key)
       return key unless blob.present? && blob.filename.present?
 

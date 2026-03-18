@@ -8,3 +8,4 @@ sharepoint:
   secret: test-secret
   site_id: test-site-id
   drive_id: test-drive-id
+  storage_key: test-storage-key
