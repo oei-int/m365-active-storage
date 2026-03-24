@@ -142,12 +142,15 @@ module ActiveStorage
     #
     # @see #get_storage_name
     # @see #handle_upload_response
+    # @see #ensure_folder_path
     def upload(key, io, **)
       auth.ensure_valid_token
-      storage_name = get_storage_name(key)
-      upload_url = "#{drive_url}/root:/#{CGI.escape(storage_name)}:/content"
+      folder_path = sharepoint_folder_for(key)
+      ensure_folder_path(folder_path)
+      storage_path = build_storage_path(get_storage_name(key), folder_path)
+      upload_url = "#{drive_url}/root:/#{encode_storage_path(storage_path)}:/content"
       response = http.put(upload_url, io.read, { "Content-Type": "application/octet-stream" })
-      handle_upload_response(response)
+      handle_upload_response(key, response)
     end
 
     # Download a file from SharePoint
@@ -185,9 +188,11 @@ module ActiveStorage
     # @see #download
     def fetch_download(key)
       auth.ensure_valid_token
-      storage_name = get_storage_name(key)
-      download_url = "#{drive_url}/root:/#{CGI.escape(storage_name)}:/content"
-      http.get(download_url)
+      download_url = sharepoint_content_url_for(key)
+      response = http.get(download_url)
+      return response unless should_retry_with_path_url?(key, response)
+
+      http.get(legacy_content_url_for(key))
     end
 
     # Handle the HTTP response from a download request
@@ -249,20 +254,25 @@ module ActiveStorage
     #
     # @see #download_chunk
     def fetch_chunk(key, range)
-      storage_name = get_storage_name(key)
-      download_url = "#{drive_url}/root:/#{CGI.escape(storage_name)}:/content"
-      http.get(download_url, { "Range": "bytes=#{range.begin}-#{range.end}" })
+      download_url = sharepoint_content_url_for(key)
+      response = http.get(download_url, { "Range": "bytes=#{range.begin}-#{range.end}" })
+      return response unless should_retry_with_path_url?(key, response)
+
+      http.get(legacy_content_url_for(key), { "Range": "bytes=#{range.begin}-#{range.end}" })
     end
 
     # Delete a file from SharePoint
     #
-    # Removes a file from the SharePoint drive. Requires the filename to be available
-    # from the PendingDelete registry (set before the blob was deleted).
+    # Removes a file from the SharePoint drive.
+    #
+    # It prefers deletion by SharePoint item ID and falls back to filename when
+    # the item ID is not available. When the blob record has already been deleted,
+    # it reads pending data from PendingDelete.
     #
     # @param [String] key The blob key to delete
     # @return [Boolean] true if deletion was successful (204 response)
     #
-    # @raise [StandardError] if filename not found or deletion fails
+    # @raise [StandardError] if identifier not found or deletion fails
     #
     # @example
     #   success = service.delete("key123")  # => true
@@ -272,10 +282,9 @@ module ActiveStorage
     def delete(key)
       auth.ensure_valid_token
 
-      storage_name = @config.storage_key.downcase == "key" ? key : M365ActiveStorage::PendingDelete.get(key)
-      raise "Filename not found for key #{key}. Cannot delete file from SharePoint." unless storage_name
+      delete_url = sharepoint_delete_url_for(key)
+      raise "Identifier not found for key #{key}. Cannot delete file from SharePoint." unless delete_url
 
-      delete_url = "#{drive_url}/root:/#{CGI.escape(storage_name)}"
       response = http.delete(delete_url)
       response.code.to_i == 204
     end
@@ -300,8 +309,7 @@ module ActiveStorage
     #   service.exist?("key123")  # => true or false
     def exist?(key)
       auth.ensure_valid_token
-      storage_name = get_storage_name(key)
-      check_url = "#{drive_url}/root:/#{CGI.escape(storage_name)}"
+      check_url = sharepoint_item_url_for(key)
       response = http.get(check_url)
       response.code.to_i == 200
     end
@@ -352,14 +360,229 @@ module ActiveStorage
     # Validates that the upload succeeded (201 Created or 200 OK).
     # Raises an error for any other status code.
     #
+    # @param [String] key The Active Storage blob key associated with the upload
     # @param [Net::HTTPResponse] response The HTTP response from the upload
     # @return [void]
     #
     # @raise [StandardError] if upload failed
-    def handle_upload_response(response)
-      return if [201, 200].include?(response.code.to_i)
+    def handle_upload_response(key, response)
+      if [201, 200].include?(response.code.to_i)
+        persist_sharepoint_id(key, response)
+        return
+      end
 
       raise "Failed to upload file to SharePoint"
+    end
+
+    # Persist the SharePoint item id in blob metadata after successful upload.
+    #
+    # Stored keys:
+    # * metadata["sharepoint_id"] - convenience flat key for quick access
+    # * metadata["sharepoint"]["id"] - namespaced SharePoint metadata
+    #
+    # @param [String] key The Active Storage blob key
+    # @param [Net::HTTPResponse] response The successful upload response body
+    # @return [void]
+    def persist_sharepoint_id(key, response)
+      return if response.body.to_s.strip.empty?
+
+      payload = JSON.parse(response.body)
+      sharepoint_id = payload["id"]
+      return if sharepoint_id.to_s.empty?
+
+      blob = ActiveStorage::Blob.find_by(key: key)
+      return unless blob
+
+      metadata = blob.metadata.is_a?(Hash) ? blob.metadata.dup : {}
+      sharepoint_metadata = metadata["sharepoint"].is_a?(Hash) ? metadata["sharepoint"].dup : {}
+
+      sharepoint_metadata["id"] = sharepoint_id
+      metadata["sharepoint"] = sharepoint_metadata
+      metadata["sharepoint_id"] = sharepoint_id
+
+      blob.update_columns(metadata: metadata)
+    rescue JSON::ParserError
+      nil
+    end
+
+    # Resolve the SharePoint content URL for a blob key.
+    #
+    # Preference order:
+    # 1) Blob metadata sharepoint_id (stable item reference)
+    # 2) Filename/key path fallback for backwards compatibility
+    #
+    # @param [String] key The Active Storage blob key
+    # @return [String] The content URL to download from SharePoint
+    def sharepoint_content_url_for(key)
+      sharepoint_id = sharepoint_item_id_for(key)
+      return "#{drive_url}/items/#{CGI.escape(sharepoint_id)}/content" if sharepoint_id.present?
+
+      legacy_content_url_for(key)
+    end
+
+    # Build the legacy path-based content URL for a blob key.
+    #
+    # Includes folder path when present in blob metadata.
+    #
+    # @param [String] key The Active Storage blob key
+    # @return [String] Path-based content URL
+    def legacy_content_url_for(key)
+      "#{drive_url}/root:/#{encode_storage_path(get_storage_path(key))}:/content"
+    end
+
+    # Retry with path URL only when ID-based lookup was attempted and failed.
+    #
+    # @param [String] key The Active Storage blob key
+    # @param [Net::HTTPResponse] response The response from the ID-based request
+    # @return [Boolean] true when a path fallback should be attempted
+    def should_retry_with_path_url?(key, response)
+      sharepoint_item_id_for(key).present? && [400, 404].include?(response.code.to_i)
+    end
+
+    # Resolve the SharePoint item URL for a blob key.
+    #
+    # Preference order:
+    # 1) Blob metadata sharepoint_id
+    # 2) Filename/key path fallback
+    #
+    # @param [String] key The Active Storage blob key
+    # @return [String] SharePoint item URL (without /content)
+    def sharepoint_item_url_for(key)
+      sharepoint_id = sharepoint_item_id_for(key)
+      return "#{drive_url}/items/#{CGI.escape(sharepoint_id)}" if sharepoint_id.present?
+
+      "#{drive_url}/root:/#{encode_storage_path(get_storage_path(key))}"
+    end
+
+    # Resolve the SharePoint delete URL for a blob key.
+    #
+    # Since blob records may already be deleted when Active Storage calls #delete,
+    # this method also checks PendingDelete data captured in before_destroy.
+    #
+    # @param [String] key The Active Storage blob key
+    # @return [String, nil] URL to delete, or nil when no identifier could be resolved
+    def sharepoint_delete_url_for(key)
+      sharepoint_id = sharepoint_item_id_for(key)
+      return "#{drive_url}/items/#{CGI.escape(sharepoint_id)}" if sharepoint_id.present?
+
+      pending_delete = M365ActiveStorage::PendingDelete.get(key)
+      if pending_delete.is_a?(Hash)
+        pending_sharepoint_id = pending_delete["sharepoint_id"] || pending_delete[:sharepoint_id]
+        return "#{drive_url}/items/#{CGI.escape(pending_sharepoint_id)}" if pending_sharepoint_id.present?
+
+        storage_name  = pending_delete["filename"] || pending_delete[:filename]
+        folder_path   = pending_delete["sharepoint_folder"] || pending_delete[:sharepoint_folder]
+        storage_path  = build_storage_path(storage_name, folder_path)
+      else
+        storage_path = pending_delete
+      end
+
+      storage_path = key if storage_path.blank? && @config.storage_key.downcase == "key"
+      return nil if storage_path.blank?
+
+      "#{drive_url}/root:/#{encode_storage_path(storage_path)}"
+    end
+
+    # Read the SharePoint folder path from blob metadata.
+    #
+    # The app sets this before attaching a file:
+    #
+    #   blob.metadata["sharepoint_folder"] = "documents/invoices"
+    #   record.file.attach(io: file, filename: "doc.pdf",
+    #                      metadata: { "sharepoint_folder" => "documents/invoices" })
+    #
+    # Supports nested paths: "level1/level2/level3"
+    #
+    # @param [String] key The Active Storage blob key
+    # @return [String, nil] Folder path or nil when not set
+    def sharepoint_folder_for(key)
+      blob = ActiveStorage::Blob.find_by(key: key)
+      return nil unless blob&.metadata.is_a?(Hash)
+
+      blob.metadata["sharepoint_folder"].presence
+    end
+
+    # Build the full SharePoint storage path combining folder and filename.
+    #
+    # @param [String] filename The file name
+    # @param [String, nil] folder_path Optional folder path (e.g. "docs/invoices")
+    # @return [String] Combined path (e.g. "docs/invoices/document.pdf")
+    def build_storage_path(filename, folder_path = nil)
+      return filename if folder_path.blank?
+
+      "#{folder_path.to_s.chomp('/')}/#{filename}"
+    end
+
+    # Get the full storage path (folder + filename) for a blob key.
+    #
+    # @param [String] key The Active Storage blob key
+    # @return [String] Full storage path
+    def get_storage_path(key)
+      build_storage_path(get_storage_name(key), sharepoint_folder_for(key))
+    end
+
+    # Encode a storage path for use in a Microsoft Graph URL.
+    #
+    # Each path segment is CGI-encoded individually so that "/" separators
+    # are preserved and not encoded as "%2F".
+    #
+    # @param [String] path The path to encode (e.g. "my folder/sub folder/file.pdf")
+    # @return [String] URL-safe encoded path (e.g. "my+folder/sub+folder/file.pdf")
+    def encode_storage_path(path)
+      path.split("/").map { |s| CGI.escape(s) }.join("/")
+    end
+
+    # Ensure the full folder hierarchy exists in SharePoint.
+    #
+    # Walks through each segment of the path from root down, creating
+    # any folder that does not yet exist. Existing folders are silently skipped.
+    #
+    # @param [String, nil] folder_path The folder path to create (e.g. "docs/invoices/2024")
+    # @return [void]
+    def ensure_folder_path(folder_path)
+      return if folder_path.blank?
+
+      segments = folder_path.split("/").reject(&:blank?)
+      segments.each_with_index do |segment, index|
+        parent_path = segments[0...index].join("/")
+        create_sharepoint_folder(parent_path, segment)
+      end
+    end
+
+    # Create a single folder in SharePoint.
+    #
+    # Uses conflictBehavior "fail" and treats a 409 Conflict response as a
+    # no-op so the call is idempotent — safe to call even when the folder
+    # already exists.
+    #
+    # @param [String] parent_path Parent folder path relative to drive root
+    #   (empty string means drive root)
+    # @param [String] folder_name The name of the folder to create
+    # @return [void]
+    def create_sharepoint_folder(parent_path, folder_name)
+      url = if parent_path.present?
+              "#{drive_url}/root:/#{encode_storage_path(parent_path)}:/children"
+            else
+              "#{drive_url}/root/children"
+            end
+      body = { name: folder_name, folder: {}, "@microsoft.graph.conflictBehavior": "fail" }.to_json
+      http.post(url, body, { "Content-Type": "application/json" })
+      # 201 = created, 409 = already exists — both are acceptable outcomes
+    end
+
+    # Extract SharePoint item id from blob metadata.
+    #
+    # Supported metadata keys:
+    # * metadata["sharepoint_id"]
+    # * metadata["sharepoint"]["id"]
+    #
+    # @param [String] key The Active Storage blob key
+    # @return [String, nil] SharePoint item id if present
+    def sharepoint_item_id_for(key)
+      blob = ActiveStorage::Blob.find_by(key: key)
+      return nil unless blob&.metadata.is_a?(Hash)
+
+      blob.metadata["sharepoint_id"].presence || blob.metadata.dig("sharepoint", "id").presence
     end
 
     # Get the storage name for a blob key
