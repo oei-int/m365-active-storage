@@ -133,4 +133,20 @@ class SharepointServiceTest < ActiveSupport::TestCase
       assert service.download(key)
     end
   end
+
+  test "should persist sharepoint id in blob metadata after successful upload" do
+    _, key, service = file_key_and_service
+    response = OpenStruct.new(code: "201", body: { "id" => "sharepoint-item-123" }.to_json)
+
+    blob = mock
+    blob.stubs(:metadata).returns({ "existing" => "data", "sharepoint" => { "name" => "doc" } })
+    blob.expects(:update_columns).with(metadata: {
+      "existing" => "data",
+      "sharepoint" => { "name" => "doc", "id" => "sharepoint-item-123" },
+      "sharepoint_id" => "sharepoint-item-123"
+    })
+
+    ActiveStorage::Blob.stubs(:find_by).with(key: key).returns(blob)
+    service.send(:handle_upload_response, key, response)
+  end
 end

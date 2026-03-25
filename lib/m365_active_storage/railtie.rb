@@ -31,9 +31,9 @@ module M365ActiveStorage
   # === File Deletion Flow
   #
   # When a blob is destroyed and it's using the SharePoint service:
-  # 1. The before_destroy callback captures the blob's filename
+  # 1. The before_destroy callback captures blob metadata needed for deletion
   # 2. Stores it in PendingDelete for later retrieval
-  # 3. The filename can be used by the async deletion worker to clean up SharePoint
+  # 3. The async deletion worker can delete by SharePoint ID or filename fallback
   #
   # @see M365ActiveStorage::Files
   # @see M365ActiveStorage::PendingDelete
@@ -41,22 +41,30 @@ module M365ActiveStorage
   class Railtie < ::Rails::Railtie
     # Hook into Rails initialization to set up gem components
     config.after_initialize do
-      # Add before_destroy callback to ActiveStorage::Blob to capture filename
+      # Add before_destroy callback to ActiveStorage::Blob to capture deletion identifiers
       ::ActiveStorage::Blob.class_eval do
         before_destroy :store_filename_for_deletion, if: proc { |blob| blob.service.is_a?(::ActiveStorage::Service::SharepointService) }
 
         private
 
-        # Store the filename in the pending deletes storage before the blob is destroyed
+        # Store deletion identifiers in the pending deletes storage before the blob is destroyed
         #
         # This callback is triggered before a blob is destroyed from the database.
-        # It captures the blob's filename and stores it in PendingDelete so that
+        # It captures the blob's filename and SharePoint item ID (if present)
+        # and stores them in PendingDelete so that
         # asynchronous deletion processes can move the file to the recycle bin
         # in SharePoint.
         #
         # @return [void]
         def store_filename_for_deletion
-          M365ActiveStorage::PendingDelete.store(key, filename.to_s)
+          blob_metadata = metadata.is_a?(Hash) ? metadata : {}
+          sharepoint_id = blob_metadata["sharepoint_id"].presence || blob_metadata.dig("sharepoint", "id").presence
+          pending_delete_data = {
+            "filename"          => filename.to_s,
+            "sharepoint_id"     => sharepoint_id,
+            "sharepoint_folder" => blob_metadata["sharepoint_folder"].presence
+          }
+          M365ActiveStorage::PendingDelete.store(key, pending_delete_data)
         end
       end
     end

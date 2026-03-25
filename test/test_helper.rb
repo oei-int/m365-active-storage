@@ -73,6 +73,7 @@ module ActiveSupport
         secret: ENV["OAUTH_SECRET"],
         site_id: ENV["SHAREPOINT_SITE_ID"],
         drive_id: ENV["SHAREPOINT_DRIVE_ID"],
+        storage_key: ENV["SHAREPOINT_STORAGE_KEY"]
       }
     end
 

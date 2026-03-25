@@ -70,7 +70,7 @@ module M365ActiveStorage
   class Configuration
     attr_reader :ms_graph_url, :ms_graph_version, :ms_graph_endpoint,
                 :auth_host, :tenant_id,
-                :app_id, :secret, :site_id, :drive_id
+                :app_id, :secret, :site_id, :drive_id, :storage_key
 
     # Initialize Configuration with the provided parameters
     #
@@ -86,6 +86,7 @@ module M365ActiveStorage
     # @option options [String] :secret The Azure AD client secret
     # @option options [String] :site_id The SharePoint site ID
     # @option options [String] :drive_id The SharePoint drive ID
+    # @option options [String] :storage_key The SharePoint storage key
     #
     # @raise [KeyError] if any required parameter is missing or empty
     #
@@ -98,7 +99,7 @@ module M365ActiveStorage
     #
     # @see #validate_configuration!
     def initialize(**options)
-      fetch_configuration_params(options)
+      fetch_configuration_params(options.with_indifferent_access)
       validate_configuration!
     rescue KeyError => e
       raise KeyError, "Configuration error: #{e.message}"
@@ -114,7 +115,6 @@ module M365ActiveStorage
     # @return [void]
     # @raise [KeyError] if any required parameter is missing
     def fetch_configuration_params(options)
-      options = options.with_indifferent_access
       @auth_host = options.fetch(:auth_host)
       @tenant_id = options.fetch(:tenant_id)
       @app_id = options.fetch(:app_id)
@@ -124,6 +124,7 @@ module M365ActiveStorage
       @site_id = options.fetch(:site_id)
       @drive_id = options.fetch(:drive_id)
       @ms_graph_endpoint = "#{@ms_graph_url}/#{@ms_graph_version}"
+      @storage_key = options.fetch(:storage_key) || "key"
     end
 
     # Validate that all required configuration parameters are present and non-empty

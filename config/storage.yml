@@ -8,3 +8,4 @@ sharepoint:
   secret: <%= Rails.application.credentials.dig(:sharepoint, :oauth_secret) || ENV["OAUTH_SECRET"] %>
   site_id: <%= Rails.application.credentials.dig(:sharepoint, :sharepoint_site_id) || ENV["SHAREPOINT_SITE_ID"] %>
   drive_id: <%= Rails.application.credentials.dig(:sharepoint, :sharepoint_drive_id) || ENV["SHAREPOINT_DRIVE_ID"] %>
+  storage_key: <%= Rails.application.credentials.dig(:sharepoint, :sharepoint_storage_key) || ENV["SHAREPOINT_STORAGE_KEY"] %>
