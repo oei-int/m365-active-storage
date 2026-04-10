@@ -43,6 +43,8 @@ module M365ActiveStorage
   # @see ActiveStorage::Blob
   # @see ActiveStorage::Service::SharepointService
   class BlobsController < ActionController::Base
+    protect_from_forgery with: :exception
+
     # Display/download a blob
     #
     # Retrieves a blob by its signed ID and sends it to the client with appropriate
