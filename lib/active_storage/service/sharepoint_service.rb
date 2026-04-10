@@ -525,11 +525,12 @@ module ActiveStorage
     #
     # Each path segment is CGI-encoded individually so that "/" separators
     # are preserved and not encoded as "%2F".
+    # Spaces are encoded as "%20" (not "+") to ensure proper URL path handling.
     #
     # @param [String] path The path to encode (e.g. "my folder/sub folder/file.pdf")
-    # @return [String] URL-safe encoded path (e.g. "my+folder/sub+folder/file.pdf")
+    # @return [String] URL-safe encoded path (e.g. "my%20folder/sub%20folder/file.pdf")
     def encode_storage_path(path)
-      path.split("/").map { |s| CGI.escape(s) }.join("/")
+      path.split("/").map { |s| CGI.escape(s).gsub("+", "%20") }.join("/")
     end
 
     # Ensure the full folder hierarchy exists in SharePoint.
