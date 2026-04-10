@@ -20,12 +20,12 @@ module ActiveSupport
         print "\n" if $current_class # rubocop:disable Style/GlobalVars
         print "\n\e[4;37;1m#{self.class.name.underscore.humanize}\e[0m"
         $current_class = self.class.name # rubocop:disable Style/GlobalVars
-        if [AuthenticationTest, HttpTest, SharepointServiceTest].include?(self.class) && !credentials_defined?
+        if ["AuthenticationTest", "HttpTest", "SharepointServiceTest"].include?(self.class.name) && !credentials_defined?
           print "\n\e[33mskipping tests due to missing credentials\e[0m"
         end
       end
 
-      skip("skipping...") if [AuthenticationTest, HttpTest, SharepointServiceTest].include?(self.class) && !credentials_defined?
+      skip("skipping...") if ["AuthenticationTest", "HttpTest", "SharepointServiceTest"].include?(self.class.name) && !credentials_defined?
     end
 
     def teardown
