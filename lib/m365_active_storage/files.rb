@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "pathname"
+
 module M365ActiveStorage
   # == File Discovery and Loading
   #
@@ -52,8 +54,17 @@ module M365ActiveStorage
     # @see #controller_files
     def self.controller_classes
       controller_files.map do |path|
-        path.remove("#{root}/lib/").remove("controllers/").remove(".rb").camelize.constantize
-      end
+        # Extract the relative path from the gem root, then convert to class name
+        root_path = Pathname.new("#{root}/lib")
+        file_path = Pathname.new(path)
+        
+        # Skip files that are not within the gem's lib directory (e.g., from other gem installations)
+        next nil if file_path.relative_path_from(root_path).to_s.start_with?("..")
+        
+        relative_path = file_path.relative_path_from(root_path).to_s
+        class_name = relative_path.remove("controllers/").remove(".rb").camelize.constantize
+        class_name
+      end.compact
     end
   end
 end
