@@ -42,8 +42,10 @@ module M365ActiveStorage
     # Hook into Rails initialization to set up gem components
     config.after_initialize do
       # Add before_destroy callback to ActiveStorage::Blob to capture deletion identifiers
+      # Add after_commit callback to persist SharePoint ID after blob is fully saved
       ::ActiveStorage::Blob.class_eval do
         before_destroy :store_filename_for_deletion, if: proc { |blob| blob.service.is_a?(::ActiveStorage::Service::SharepointService) }
+        after_commit :persist_sharepoint_id_from_thread_storage, on: [:create], if: proc { |blob| blob.service.is_a?(::ActiveStorage::Service::SharepointService) }
 
         private
 
@@ -65,6 +67,22 @@ module M365ActiveStorage
             "sharepoint_folder" => blob_metadata["sharepoint_folder"].presence
           }
           M365ActiveStorage::PendingDelete.store(key, pending_delete_data)
+        end
+
+        # Persist the SharePoint ID from the upload response after blob is saved
+        #
+        # This callback fires after the blob has been successfully committed to the database
+        # via the after_commit hook. It retrieves the upload response stored in thread-local
+        # storage by the service.upload method and persists the SharePoint ID to avoid
+        # being overwritten by Active Storage's blob.save.
+        #
+        # @return [void]
+        def persist_sharepoint_id_from_thread_storage
+          upload_response = Thread.current[:sharepoint_upload_response]
+          return unless upload_response.present?
+
+          Thread.current[:sharepoint_upload_response] = nil # Clean up thread storage
+          service.send(:persist_sharepoint_id_from_response, key, upload_response)
         end
       end
     end

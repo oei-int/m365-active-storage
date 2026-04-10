@@ -129,6 +129,8 @@ module ActiveStorage
     #
     # Uploads file content to the configured SharePoint drive.
     # The file is stored with the blob's filename for better organization in SharePoint.
+    # The SharePoint item ID is persisted asynchronously in an after_commit hook
+    # to avoid being overwritten by Active Storage's blob.save.
     #
     # @param [String] key The Active Storage blob key (ignored, filename used instead)
     # @param [IO] io The file content as an IO object
@@ -150,7 +152,10 @@ module ActiveStorage
       storage_path = build_storage_path(get_storage_name(key), folder_path)
       upload_url = "#{drive_url}/root:/#{encode_storage_path(storage_path)}:/content"
       response = http.put(upload_url, io.read, { "Content-Type": "application/octet-stream" })
-      handle_upload_response(key, response)
+      raise "Failed to upload file to SharePoint" unless [201, 200].include?(response.code.to_i)
+
+      # Store response body payload in thread-local storage for later retrieval in after_commit hook
+      Thread.current[:sharepoint_upload_response] = response
     end
 
     # Download a file from SharePoint
@@ -355,38 +360,27 @@ module ActiveStorage
       "#{config.ms_graph_endpoint}/sites/#{config.site_id}/drives/#{config.drive_id}"
     end
 
-    # Handle the response from an upload request
-    #
-    # Validates that the upload succeeded (201 Created or 200 OK).
-    # Raises an error for any other status code.
-    #
-    # @param [String] key The Active Storage blob key associated with the upload
-    # @param [Net::HTTPResponse] response The HTTP response from the upload
-    # @return [void]
-    #
-    # @raise [StandardError] if upload failed
-    def handle_upload_response(key, response)
-      if [201, 200].include?(response.code.to_i)
-        persist_sharepoint_id(key, response)
-        return
-      end
 
-      raise "Failed to upload file to SharePoint"
-    end
 
-    # Persist the SharePoint item id in blob metadata after successful upload.
+    # Persist the SharePoint item id in blob metadata from a stored upload response.
+    #
+    # This is called by the Railtie's after_commit hook to store the SharePoint ID
+    # after the blob has been fully saved to the database, preventing the ID from
+    # being overwritten by Active Storage's metadata save.
     #
     # Stored keys:
     # * metadata["sharepoint_id"] - convenience flat key for quick access
     # * metadata["sharepoint"]["id"] - namespaced SharePoint metadata
     #
     # @param [String] key The Active Storage blob key
-    # @param [Net::HTTPResponse] response The successful upload response body
+    # @param [Net::HTTPResponse, String] response The upload response or JSON payload string
     # @return [void]
-    def persist_sharepoint_id(key, response)
-      return if response.body.to_s.strip.empty?
 
-      payload = JSON.parse(response.body)
+    def persist_sharepoint_id_from_response(key, response)
+      body = response.is_a?(String) ? response : response.body.to_s
+      return if body.to_s.strip.empty?
+
+      payload = JSON.parse(body)
       sharepoint_id = payload["id"]
       return if sharepoint_id.to_s.empty?
 

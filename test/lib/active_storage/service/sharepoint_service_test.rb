@@ -147,6 +147,6 @@ class SharepointServiceTest < ActiveSupport::TestCase
     })
 
     ActiveStorage::Blob.stubs(:find_by).with(key: key).returns(blob)
-    service.send(:handle_upload_response, key, response)
+    service.send(:persist_sharepoint_id_from_response, key, response)
   end
 end
