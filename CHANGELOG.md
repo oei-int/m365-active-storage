@@ -1,3 +1,9 @@
+## [1.1.2] - 2026-04-17
+
+### Bug Fixes
+
+- Fix SharePoint blob routing for filenames with embedded dots, ensuring files like `document.backup.pdf` are served correctly without path-based routing conflicts.
+
 ## [1.1.1] - 2026-04-10
 
 ### Bug Fixes
